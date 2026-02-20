@@ -56,10 +56,10 @@ def save_config(path: Path, cfg: Dict[str, Any]) -> None:
 # ----------------------------
 # Validation helpers
 # ----------------------------
-def validate_dir(path_str: str) -> Tuple[bool, str]:
+def validate_dir_read(path_str: str) -> Tuple[bool, str]:
     """
-    Validate the directory exists and is readable.
-    Works with local and UNC paths on Windows.
+    Validate directory exists and is readable (listable).
+    Works for local and UNC paths on Windows.
     """
     try:
         p = Path(path_str)
@@ -67,13 +67,44 @@ def validate_dir(path_str: str) -> Tuple[bool, str]:
             return False, "Path does not exist."
         if not p.is_dir():
             return False, "Path exists but is not a directory."
-        # Try listing one entry to confirm read access
         try:
             next(p.iterdir(), None)
         except PermissionError:
             return False, "No permission to read directory."
         except OSError as e:
             return False, f"OS error while reading directory: {e}"
+        return True, "OK"
+    except Exception as e:
+        return False, f"Invalid path: {e}"
+
+
+def validate_dir_write(path_str: str) -> Tuple[bool, str]:
+    """
+    Validate directory is writable by creating and deleting a temp file.
+    ALWAYS attempts write (as requested).
+    """
+    try:
+        p = Path(path_str)
+        if not p.exists():
+            return False, "Path does not exist."
+        if not p.is_dir():
+            return False, "Path exists but is not a directory."
+
+        test_file = p / f".qb_config_wizard_write_test_{os.getpid()}.tmp"
+        try:
+            test_file.write_text("test", encoding="utf-8")
+            _ = test_file.read_text(encoding="utf-8")
+        except PermissionError:
+            return False, "No permission to write in directory."
+        except OSError as e:
+            return False, f"OS error while writing: {e}"
+        finally:
+            try:
+                if test_file.exists():
+                    test_file.unlink()
+            except Exception:
+                return False, "Wrote test file but could not delete it (permissions/locks)."
+
         return True, "OK"
     except Exception as e:
         return False, f"Invalid path: {e}"
@@ -97,11 +128,11 @@ def validate_qb_login(base_url: str, username: str, password: str) -> Tuple[bool
             return False, f"HTTP {r.status_code} {body!r}"
         if body.lower() != "ok.":
             return False, f"Login rejected: {body!r} (check username/password and Web UI settings)"
-        # Optional extra: fetch app version to confirm session works
+
         v = s.get(f"{base_url}/api/v2/app/version", timeout=15)
-        if v.status_code != 200:
-            return True, "Login OK (version check failed, but auth works)"
-        return True, f"Login OK (qB version: {v.text.strip()})"
+        if v.status_code == 200:
+            return True, f"Login OK (qB version: {v.text.strip()})"
+        return True, "Login OK (version check failed, but auth works)"
     except requests.exceptions.RequestException as e:
         return False, f"Request error: {e}"
 
@@ -123,7 +154,10 @@ def wizard() -> None:
         "qBittorrent URL (Web UI base)",
         existing.get("qb", {}).get("url") if existing else "http://192.168.0.231:8080",
     )
-    qb_user = prompt_required("qBittorrent username", existing.get("qb", {}).get("username") if existing else "admin")
+    qb_user = prompt_required(
+        "qBittorrent username",
+        existing.get("qb", {}).get("username") if existing else "admin",
+    )
 
     print("\nPassword will not be displayed while typing.")
     qb_pass = getpass("qBittorrent password: ").strip()
@@ -170,7 +204,10 @@ def wizard() -> None:
     if media_roots:
         print("\nCurrent media roots loaded:")
         for i, mr in enumerate(media_roots, 1):
-            print(f"  {i}. {mr.get('name')} | scan_path={mr.get('scan_path')} | qb_root={mr.get('qb_root')} | category={mr.get('category')}")
+            print(
+                f"  {i}. {mr.get('name')} | scan_path={mr.get('scan_path')} | "
+                f"qb_root={mr.get('qb_root')} | category={mr.get('category')}"
+            )
         choice = prompt("\nDo you want to (k)eep, (c)lear and re-enter, or (a)dd more?", "a").lower()
         if choice.startswith("c"):
             media_roots = []
@@ -190,31 +227,42 @@ def wizard() -> None:
     # ----------------------------
     print("\n=== Validation ===")
 
-    # 1) qB login test
-    print("\n[1/2] Testing qBittorrent login...")
+    print("\n[1/3] Testing qBittorrent login...")
     ok, msg = validate_qb_login(qb_url, qb_user, qb_pass)
     print(f"  Result: {'OK' if ok else 'FAIL'} - {msg}")
     if not ok and not yesno("Continue anyway?", False):
         print("Aborting. Fix qB URL/credentials and run wizard again.")
         return
 
-    # 2) Path tests
-    print("\n[2/2] Testing folder paths...")
     paths_to_test = [("torrent_dir", torrent_dir)]
     if torrent_stage_dir.strip():
         paths_to_test.append(("torrent_stage_dir", torrent_stage_dir))
     for mr in media_roots:
         paths_to_test.append((f"media_root:{mr['name']}", mr["scan_path"]))
 
-    all_ok = True
+    print("\n[2/3] Testing folder READ access...")
+    read_all_ok = True
     for label, p in paths_to_test:
-        okp, msgp = validate_dir(p)
+        okp, msgp = validate_dir_read(p)
         print(f"  {label}: {'OK' if okp else 'FAIL'} - {p} - {msgp}")
         if not okp:
-            all_ok = False
-
-    if not all_ok and not yesno("Some paths failed validation. Save config anyway?", False):
+            read_all_ok = False
+    if not read_all_ok and not yesno("Some paths failed READ validation. Continue anyway?", False):
         print("Aborting. Fix paths and run wizard again.")
+        return
+
+    print("\n[3/3] Testing folder WRITE access (always)...")
+    write_all_ok = True
+    for label, p in paths_to_test:
+        okw, msgw = validate_dir_write(p)
+        print(f"  {label}: {'OK' if okw else 'FAIL'} - {p} - {msgw}")
+        if not okw:
+            write_all_ok = False
+
+    # NOTE: torrent_dir is often read-only (share). Because you asked for ALWAYS write testing,
+    # this may fail. You can still choose to save and continue.
+    if not write_all_ok and not yesno("Some paths failed WRITE validation. Save config anyway?", False):
+        print("Aborting. Fix permissions/paths and run wizard again.")
         return
 
     cfg = {
