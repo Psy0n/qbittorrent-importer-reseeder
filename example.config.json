@@ -1,0 +1,35 @@
+{
+  "qb": {
+    "url": "http://192.168.0.231:8080",
+    "username": "admin",
+    "password": "CHANGE_ME"
+  },
+  "torrent_dir": "\\\\NEUTRINO\\\\Downloads\\\\Torrents",
+  "torrent_stage_dir": "\\\\Ds620\\\\ds620\\\\Torrents",
+  "media_roots": [
+    {
+      "name": "Movies",
+      "scan_path": "\\\\Ds620\\\\ds620\\\\Movies",
+      "qb_root": "/Movies",
+      "category": "Movies"
+    },
+    {
+      "name": "Series",
+      "scan_path": "\\\\Ds620\\\\ds620\\\\Series",
+      "qb_root": "/Series",
+      "category": "Series"
+    },
+    {
+      "name": "Animated",
+      "scan_path": "\\\\Ds620\\\\ds620\\\\Animated",
+      "qb_root": "/Animated",
+      "category": "Animated"
+    },
+    {
+      "name": "Documentaries",
+      "scan_path": "\\\\Ds620\\\\ds620\\\\Documentaries",
+      "qb_root": "/Documentaries",
+      "category": "Documentaries"
+    }
+  ]
+}
